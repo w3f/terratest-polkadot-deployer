@@ -14,12 +14,14 @@ import (
     "github.com/gruntwork-io/terratest/modules/test-structure"
     "github.com/gruntwork-io/terratest/modules/http-helper"
 
+    "github.com/gruntwork-io/terratest/modules/terraform"
+
     "github.com/stretchr/testify/require"
     "github.com/stretchr/testify/assert"
 )
 
 // Test that the Node count matches the Terraform specification
-func ValidateNodeCount(t *testing.T, terraformDir string) {
+func TestNodeCount(t *testing.T, terraformDir string) {
     kubectlOptions := test_structure.LoadKubectlOptions(t, terraformDir)
     nodeCount := test_structure.LoadInt(t, terraformDir, "nodeCount")
 
@@ -29,17 +31,18 @@ func ValidateNodeCount(t *testing.T, terraformDir string) {
 }
 
 // Test service deployment and verify it's availability on configured nodePort
-func ValidateServiceAvailability(t *testing.T, terraformDir string) {
+func TestServiceAvailability(t *testing.T, terraformDir string) {
     kubectlOptions := test_structure.LoadKubectlOptions(t, terraformDir)
     nodePort := test_structure.LoadInt(t, terraformDir, "nodePort")
 
+    // Deploy Helm chart
+    var helmValues map[string]string
+    helmValuesFile := test_structure.LoadString(t, terraformDir, "helmValuesFile")
+    test_structure.LoadTestData(t, helmValuesFile, &helmValues)
+
     helmOptions := &helm.Options{
         KubectlOptions: kubectlOptions,
-        SetValues: map[string]string{
-            "image.repo": "nginx",
-            "image.tag":  "1.8",
-            "nodePort":   fmt.Sprintf("%d", nodePort),
-        },
+        SetValues: helmValues,
     }
 
     helmChartPath, err := filepath.Abs("fixtures/nginx-chart")
@@ -50,13 +53,13 @@ func ValidateServiceAvailability(t *testing.T, terraformDir string) {
     helm.Install(t, helmOptions, helmChartPath, helmReleaseName)
 
     // Validate service availability
-    k8s.WaitUntilServiceAvailable(t, kubectlOptions, helmReleaseName, 20, 5*time.Second)
+    k8s.WaitUntilServiceAvailable(t, kubectlOptions, helmReleaseName, 60, 5*time.Second)
     service := k8s.GetService(t, kubectlOptions, helmReleaseName)
     require.Equal(t, service.Name, helmReleaseName)
 
     // Check external connectivity
     tlsConfig := tls.Config{}
-    url := fmt.Sprintf("http://%s:%d", GetNodeAddress(t, kubectlOptions, "ExternalIP"), nodePort)
+    url := fmt.Sprintf("http://%s", GetPublicServiceEndpoint(t, kubectlOptions, service, nodePort))
     http_helper.HttpGetWithRetryWithCustomValidation(
         t,
         url,
@@ -67,4 +70,13 @@ func ValidateServiceAvailability(t *testing.T, terraformDir string) {
             return statusCode == 200
         },
     )
+}
+
+// Validate no resources will change on subsequent terraform executions
+func TestResourceChanges(t *testing.T, terraformDir string) {
+    terraformOptions := test_structure.LoadTerraformOptions(t, terraformDir)
+    planResult := terraform.InitAndPlan(t, terraformOptions)
+    resourceCount := terraform.GetResourceCount(t, planResult)
+    assert.Equal(t, 0, resourceCount.Change)
+    assert.Equal(t, 0, resourceCount.Add)
 }

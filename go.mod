@@ -1,3 +1,3 @@
-module github.com/vladimir-babichev/terratest-polkadot-deployer
+module github.com/w3f/terratest-polkadot-deployer
 
 go 1.14
